@@ -1,0 +1,9 @@
+services:
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    volumes:
+      - locomat-dados:/data
+volumes:
+  locomat-dados:
