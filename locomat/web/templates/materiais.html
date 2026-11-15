@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block conteudo %}
+<h1 class="h4">Materiais</h1>
+<form method="post" action="{{ url_for('web.cadastrar_material') }}" class="row g-2 mb-4">
+  <div class="col-md-2"><input class="form-control" name="codigo" placeholder="Código (BOLA-001)" required></div>
+  <div class="col-md-3"><input class="form-control" name="nome" placeholder="Nome" required></div>
+  <div class="col-md-2"><select class="form-select" name="tipo">
+    {% for t in tipos %}<option value="{{ t.value }}">{{ t.value|replace('_', ' ') }}</option>{% endfor %}
+  </select></div>
+  <div class="col-md-2"><select class="form-select" name="conservacao">
+    {% for c in conservacoes %}<option value="{{ c.value }}">{{ c.value }}</option>{% endfor %}
+  </select></div>
+  <div class="col-md-3"><button class="btn btn-primary w-100">Cadastrar</button></div>
+</form>
+<table class="table table-sm">
+  <thead><tr><th>Código</th><th>Nome</th><th>Tipo</th><th>Conservação</th><th>Estado</th></tr></thead>
+  <tbody>
+  {% for m in itens %}
+    <tr><td>{{ m.codigo }}</td><td>{{ m.nome }}</td><td>{{ m.tipo.value|replace('_', ' ') }}</td>
+        <td>{{ m.conservacao.value }}</td><td>{{ m.estado.value|replace('_', ' ') }}</td></tr>
+  {% else %}
+    <tr><td colspan="5" class="text-muted">Nenhum material cadastrado.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
