@@ -45,6 +45,14 @@ class CadastroDeMaterialTest(unittest.TestCase):
 
 
 class RastreabilidadeTest(unittest.TestCase):  # cenário C04
+    def test_cadastro_gera_movimento_com_quem_registrou_data_e_estado(self):
+        _, servico, historico = montar()
+        servico.cadastrar("BOLA-001", "Bola", "esportivo", "bom", registrado_por="Rany")
+        (mov,) = historico.listar("BOLA-001")
+        self.assertEqual((mov.tipo, mov.registrado_por, mov.estado_resultante),
+                         ("cadastro", "Rany", "disponivel"))
+        self.assertEqual(mov.registrado_em.year, 2026)
+
     def test_se_o_historico_falha_o_material_nao_e_gravado(self):
         banco, servico, historico = montar()
 
