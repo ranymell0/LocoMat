@@ -37,6 +37,11 @@ class CadastroDeMaterialTest(unittest.TestCase):
         with self.assertRaises(CodigoDuplicado):
             servico.cadastrar("surdo-01", "Outro surdo", "instrumento_bateria", "bom")
 
+    def test_filtra_por_tipo(self):
+        _, servico, _ = montar()
+        servico.cadastrar("BOLA-001", "Bola", "esportivo", "bom")
+        servico.cadastrar("SURDO-01", "Surdo", "instrumento_bateria", "regular")
+        self.assertEqual([m.codigo for m in servico.listar(tipo="instrumento_bateria")], ["SURDO-01"])
 
 
 class RastreabilidadeTest(unittest.TestCase):  # cenário C04

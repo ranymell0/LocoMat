@@ -1,0 +1,133 @@
+diff --git a/locomat/materiais/portas.py b/locomat/materiais/portas.py
+index 7c60513..d98d6ad 100644
+--- a/locomat/materiais/portas.py
++++ b/locomat/materiais/portas.py
+@@ -1,6 +1,6 @@
+ from typing import Protocol
+ 
+-from locomat.materiais.modelo import Material
++from locomat.materiais.modelo import EstadoMaterial, Material, TipoMaterial
+ 
+ 
+ class RepositorioMateriais(Protocol):
+@@ -8,4 +8,5 @@ class RepositorioMateriais(Protocol):
+ 
+     def buscar_por_codigo(self, codigo: str) -> Material | None: ...
+ 
+-    def listar(self) -> list[Material]: ...
++    def listar(self, tipo: TipoMaterial | None = None,
++               estado: EstadoMaterial | None = None) -> list[Material]: ...
+diff --git a/locomat/materiais/servico.py b/locomat/materiais/servico.py
+index d39d8e9..a7742f9 100644
+--- a/locomat/materiais/servico.py
++++ b/locomat/materiais/servico.py
+@@ -15,7 +15,7 @@ class CodigoDuplicado(MaterialInvalido):
+ 
+ 
+ class MaterialService:
+-    """Interface oferecida: cadastrar(...) e listar(...) (H01)."""
++    """Interface oferecida: cadastrar(...) e listar(...) (H01 e H02)."""
+ 
+     def __init__(self, repositorio: RepositorioMateriais, historico: HistoricoService,
+                  transacao: Callable[[], AbstractContextManager]):
+@@ -45,5 +45,6 @@ class MaterialService:
+                                       EstadoMaterial.DISPONIVEL.value)
+         return material
+ 
+-    def listar(self) -> list[Material]:
+-        return self._repo.listar()
++    def listar(self, tipo: str | None = None, estado: str | None = None) -> list[Material]:
++        return self._repo.listar(TipoMaterial(tipo) if tipo else None,
++                                 EstadoMaterial(estado) if estado else None)
+diff --git a/locomat/persistencia/repositorio_materiais.py b/locomat/persistencia/repositorio_materiais.py
+index b4d96bc..1de38f2 100644
+--- a/locomat/persistencia/repositorio_materiais.py
++++ b/locomat/persistencia/repositorio_materiais.py
+@@ -24,6 +24,15 @@ class RepositorioMateriaisSQL:
+     def buscar_por_codigo(self, codigo: str) -> Material | None:
+         linha = self._banco.executar("SELECT * FROM material WHERE codigo = ?", (codigo,)).fetchone()
+         return _para_material(linha) if linha else None
+-    def listar(self) -> list[Material]:
+-        linhas = self._banco.executar("SELECT * FROM material ORDER BY codigo").fetchall()
+-        return [_para_material(l) for l in linhas]
++
++    def listar(self, tipo: TipoMaterial | None = None,
++               estado: EstadoMaterial | None = None) -> list[Material]:
++        sql, parametros = "SELECT * FROM material WHERE 1=1", []
++        if tipo:
++            sql += " AND tipo = ?"
++            parametros.append(tipo.value)
++        if estado:
++            sql += " AND estado = ?"
++            parametros.append(estado.value)
++        sql += " ORDER BY codigo"
++        return [_para_material(l) for l in self._banco.executar(sql, tuple(parametros)).fetchall()]
+diff --git a/locomat/web/rotas.py b/locomat/web/rotas.py
+index 2d35fa3..eebdde3 100644
+--- a/locomat/web/rotas.py
++++ b/locomat/web/rotas.py
+@@ -1,6 +1,7 @@
+ from flask import Blueprint, flash, redirect, render_template, request, url_for
+ 
+-from locomat.materiais import Conservacao, MaterialInvalido, MaterialService, TipoMaterial
++from locomat.materiais import (Conservacao, EstadoMaterial, MaterialInvalido, MaterialService,
++                               TipoMaterial)
+ 
+ 
+ def criar_blueprint(materiais: MaterialService) -> Blueprint:
+@@ -12,8 +13,15 @@ def criar_blueprint(materiais: MaterialService) -> Blueprint:
+ 
+     @bp.get("/materiais")
+     def listar_materiais():
+-        return render_template("materiais.html", itens=materiais.listar(), tipos=list(TipoMaterial),
+-                               conservacoes=list(Conservacao))
++        tipo, estado = request.args.get("tipo") or None, request.args.get("estado") or None
++        try:
++            itens = materiais.listar(tipo, estado)
++        except ValueError:
++            itens = []
++            flash("Filtro inválido.", "erro")
++        return render_template("materiais.html", itens=itens, tipos=list(TipoMaterial),
++                               estados=list(EstadoMaterial), conservacoes=list(Conservacao),
++                               filtro_tipo=tipo, filtro_estado=estado)
+ 
+     @bp.post("/materiais")
+     def cadastrar_material():
+diff --git a/locomat/web/templates/materiais.html b/locomat/web/templates/materiais.html
+index 49e67ae..433d393 100644
+--- a/locomat/web/templates/materiais.html
++++ b/locomat/web/templates/materiais.html
+@@ -12,6 +12,17 @@
+   </select></div>
+   <div class="col-md-3"><button class="btn btn-primary w-100">Cadastrar</button></div>
+ </form>
++<form method="get" class="row g-2 mb-3">
++  <div class="col-md-3"><select class="form-select" name="tipo">
++    <option value="">Todos os tipos</option>
++    {% for t in tipos %}<option value="{{ t.value }}" {{ 'selected' if t.value == filtro_tipo }}>{{ t.value|replace('_', ' ') }}</option>{% endfor %}
++  </select></div>
++  <div class="col-md-3"><select class="form-select" name="estado">
++    <option value="">Todos os estados</option>
++    {% for e in estados %}<option value="{{ e.value }}" {{ 'selected' if e.value == filtro_estado }}>{{ e.value|replace('_', ' ') }}</option>{% endfor %}
++  </select></div>
++  <div class="col-md-2"><button class="btn btn-outline-secondary w-100">Filtrar</button></div>
++</form>
+ <table class="table table-sm">
+   <thead><tr><th>Código</th><th>Nome</th><th>Tipo</th><th>Conservação</th><th>Estado</th></tr></thead>
+   <tbody>
+diff --git a/tests/test_materiais.py b/tests/test_materiais.py
+index 89244d3..cd1770c 100644
+--- a/tests/test_materiais.py
++++ b/tests/test_materiais.py
+@@ -37,6 +37,11 @@ class CadastroDeMaterialTest(unittest.TestCase):
+         with self.assertRaises(CodigoDuplicado):
+             servico.cadastrar("surdo-01", "Outro surdo", "instrumento_bateria", "bom")
+ 
++    def test_filtra_por_tipo(self):
++        _, servico, _ = montar()
++        servico.cadastrar("BOLA-001", "Bola", "esportivo", "bom")
++        servico.cadastrar("SURDO-01", "Surdo", "instrumento_bateria", "regular")
++        self.assertEqual([m.codigo for m in servico.listar(tipo="instrumento_bateria")], ["SURDO-01"])
+ 
+ 
+ class RastreabilidadeTest(unittest.TestCase):  # cenário C04

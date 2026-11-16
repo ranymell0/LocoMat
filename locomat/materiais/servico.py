@@ -15,7 +15,7 @@ class CodigoDuplicado(MaterialInvalido):
 
 
 class MaterialService:
-    """Interface oferecida: cadastrar(...) e listar(...) (H01)."""
+    """Interface oferecida: cadastrar(...) e listar(...) (H01 e H02)."""
 
     def __init__(self, repositorio: RepositorioMateriais, historico: HistoricoService,
                  transacao: Callable[[], AbstractContextManager]):
@@ -45,5 +45,6 @@ class MaterialService:
                                       EstadoMaterial.DISPONIVEL.value)
         return material
 
-    def listar(self) -> list[Material]:
-        return self._repo.listar()
+    def listar(self, tipo: str | None = None, estado: str | None = None) -> list[Material]:
+        return self._repo.listar(TipoMaterial(tipo) if tipo else None,
+                                 EstadoMaterial(estado) if estado else None)

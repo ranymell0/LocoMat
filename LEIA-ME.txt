@@ -1,0 +1,68 @@
+LocoMat, Etapa 2: como subir o codigo em 4 branches (estrutura, h01, h02, h13)
+
+Cada patch foi aplicado em ordem num diretorio limpo: os testes passam em todas as etapas
+(5, 14, 15 e 16 testes) e o resultado final e identico ao esqueleto que voces ja tem.
+
+Cada pessoa commita com a PROPRIA conta e no proprio computador. Os patches nao tem autor.
+Os commits terao a data de hoje; nao mudem data nem autor.
+
+Pre-requisito: a main do GitHub precisa estar vazia. Se ja tiver README.md ou .gitignore,
+apague esses arquivos num commit antes de aplicar o patch 01.
+
+ORDEM, QUEM FAZ E QUEM REVISA (outro integrante revisa e faz o merge, com o pipeline verde)
+
+  Branch                          Patch(es)                                Autor            Revisor
+  etapa-2/estrutura               01 (infra) e 02 (modulos e regras)       Marco e Weder    Rany
+  h01-cadastrar-material          03                                       Rany             Marco
+  h02-consultar-materiais         04                                       Rany             Weder
+  h13-consultar-historico         05                                       Marco            Weder
+
+So abram a branch seguinte depois do merge da anterior na main (git switch main && git pull).
+
+PASSO A PASSO
+
+1) estrutura. Marco:
+   git switch main && git pull
+   git switch -c etapa-2/estrutura
+   git apply patches/01-estrutura-infra.patch
+   git add -A && git commit -m "estrutura: README, Docker e pipeline de CI"
+   git push -u origin etapa-2/estrutura
+
+   Weder, na mesma branch:
+   git fetch && git switch etapa-2/estrutura
+   git apply patches/02-estrutura-modulos-e-regras.patch
+   git add -A && git commit -m "estrutura: pacotes dos modulos, raiz de composicao e teste das regras de dependencia"
+   git push
+
+   Marco abre o PR (gh pr create --fill). Rany revisa. Merge com o pipeline verde.
+
+2) h01. Rany:
+   git switch main && git pull
+   git switch -c h01-cadastrar-material
+   git apply patches/03-h01-cadastrar-material.patch
+   git add -A && git commit -m "H01: cadastrar material (materiais, historico, persistencia e tela)"
+   git push -u origin h01-cadastrar-material && gh pr create --fill
+
+3) h02. Rany:
+   git switch main && git pull
+   git switch -c h02-consultar-materiais
+   git apply patches/04-h02-consultar-materiais.patch
+   git add -A && git commit -m "H02: consultar materiais por tipo e estado"
+   git push -u origin h02-consultar-materiais && gh pr create --fill
+
+4) h13. Marco:
+   git switch main && git pull
+   git switch -c h13-consultar-historico
+   git apply patches/05-h13-consultar-historico.patch
+   git add -A && git commit -m "H13: consultar o historico de movimentos de um material"
+   git push -u origin h13-consultar-historico && gh pr create --fill
+
+5) Depois do ultimo merge (qualquer pessoa):
+   git switch main && git pull
+   git tag etapa-2 && git push origin etapa-2
+   (se a tag ja existir: git tag -d etapa-2 && git push origin :refs/tags/etapa-2 antes)
+
+Se o pipeline falhar no PR, confira Python 3.12 e rode localmente:
+   pip install -r requirements.txt
+   python -c "import locomat; locomat.create_app(':memory:')"
+   python -m unittest discover -s tests -v

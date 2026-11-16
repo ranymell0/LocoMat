@@ -1,0 +1,175 @@
+diff --git a/locomat/__init__.py b/locomat/__init__.py
+index 18669c9..67fc5b8 100644
+--- a/locomat/__init__.py
++++ b/locomat/__init__.py
+@@ -23,6 +23,6 @@ def create_app(caminho_banco: str | None = None) -> Flask:
+ 
+     app = Flask(__name__, template_folder="web/templates")
+     app.config["SECRET_KEY"] = os.environ.get("LOCOMAT_SECRET", "dev-apenas-para-desenvolvimento")
+-    app.register_blueprint(criar_blueprint(materiais))
++    app.register_blueprint(criar_blueprint(materiais, historico))
+     app.extensions["locomat_banco"] = banco
+     return app
+diff --git a/locomat/historico/portas.py b/locomat/historico/portas.py
+index de7e448..9d3ef24 100644
+--- a/locomat/historico/portas.py
++++ b/locomat/historico/portas.py
+@@ -5,3 +5,5 @@ from locomat.historico.modelo import Movimento
+ 
+ class RepositorioHistorico(Protocol):
+     def adicionar(self, movimento: Movimento) -> Movimento: ...
++
++    def listar_por_material(self, material_codigo: str) -> list[Movimento]: ...
+diff --git a/locomat/historico/servico.py b/locomat/historico/servico.py
+index e3779f0..7fa5b4b 100644
+--- a/locomat/historico/servico.py
++++ b/locomat/historico/servico.py
+@@ -20,3 +20,6 @@ class HistoricoService:
+                               estado_resultante=estado_resultante,
+                               registrado_em=self._relogio(), responsavel=responsavel)
+         return self._repo.adicionar(movimento)
++
++    def listar(self, material_codigo: str) -> list[Movimento]:
++        return self._repo.listar_por_material(material_codigo)
+diff --git a/locomat/persistencia/repositorio_historico.py b/locomat/persistencia/repositorio_historico.py
+index e63dbf6..17f4535 100644
+--- a/locomat/persistencia/repositorio_historico.py
++++ b/locomat/persistencia/repositorio_historico.py
+@@ -1,4 +1,5 @@
+ from dataclasses import replace
++from datetime import datetime
+ 
+ from locomat.historico import Movimento
+ from locomat.persistencia.banco import Banco
+@@ -16,3 +17,13 @@ class RepositorioHistoricoSQL:
+              movimento.registrado_por, movimento.estado_resultante,
+              movimento.registrado_em.isoformat()))
+         return replace(movimento, id=cursor.lastrowid)
++
++    def listar_por_material(self, material_codigo: str) -> list[Movimento]:
++        linhas = self._banco.executar(
++            "SELECT * FROM movimento WHERE material_codigo = ? ORDER BY id", (material_codigo,)
++        ).fetchall()
++        return [Movimento(material_codigo=l["material_codigo"], tipo=l["tipo"],
++                          responsavel=l["responsavel"], registrado_por=l["registrado_por"],
++                          estado_resultante=l["estado_resultante"],
++                          registrado_em=datetime.fromisoformat(l["registrado_em"]), id=l["id"])
++                for l in linhas]
+diff --git a/locomat/web/rotas.py b/locomat/web/rotas.py
+index eebdde3..7a20899 100644
+--- a/locomat/web/rotas.py
++++ b/locomat/web/rotas.py
+@@ -1,10 +1,11 @@
+ from flask import Blueprint, flash, redirect, render_template, request, url_for
+ 
++from locomat.historico import HistoricoService
+ from locomat.materiais import (Conservacao, EstadoMaterial, MaterialInvalido, MaterialService,
+                                TipoMaterial)
+ 
+ 
+-def criar_blueprint(materiais: MaterialService) -> Blueprint:
++def criar_blueprint(materiais: MaterialService, historico: HistoricoService) -> Blueprint:
+     bp = Blueprint("web", __name__)
+ 
+     @bp.get("/")
+@@ -33,4 +34,8 @@ def criar_blueprint(materiais: MaterialService) -> Blueprint:
+             flash(str(erro), "erro")
+         return redirect(url_for("web.listar_materiais"))
+ 
++    @bp.get("/materiais/<codigo>/historico")
++    def ver_historico(codigo: str):
++        return render_template("historico.html", codigo=codigo, movimentos=historico.listar(codigo))
++
+     return bp
+diff --git a/locomat/web/templates/historico.html b/locomat/web/templates/historico.html
+new file mode 100644
+index 0000000..6d706b8
+--- /dev/null
++++ b/locomat/web/templates/historico.html
+@@ -0,0 +1,16 @@
++{% extends "base.html" %}
++{% block conteudo %}
++<h1 class="h4">Histórico de {{ codigo }}</h1>
++<table class="table table-sm">
++  <thead><tr><th>Quando</th><th>Movimento</th><th>Responsável</th><th>Registrado por</th><th>Estado</th></tr></thead>
++  <tbody>
++  {% for m in movimentos %}
++    <tr><td>{{ m.registrado_em.strftime('%d/%m/%Y %H:%M') }}</td><td>{{ m.tipo }}</td>
++        <td>{{ m.responsavel or '-' }}</td><td>{{ m.registrado_por }}</td><td>{{ m.estado_resultante }}</td></tr>
++  {% else %}
++    <tr><td colspan="5" class="text-muted">Sem movimentos.</td></tr>
++  {% endfor %}
++  </tbody>
++</table>
++<a href="{{ url_for('web.listar_materiais') }}">Voltar</a>
++{% endblock %}
+diff --git a/locomat/web/templates/materiais.html b/locomat/web/templates/materiais.html
+index 433d393..1871d16 100644
+--- a/locomat/web/templates/materiais.html
++++ b/locomat/web/templates/materiais.html
+@@ -24,13 +24,14 @@
+   <div class="col-md-2"><button class="btn btn-outline-secondary w-100">Filtrar</button></div>
+ </form>
+ <table class="table table-sm">
+-  <thead><tr><th>Código</th><th>Nome</th><th>Tipo</th><th>Conservação</th><th>Estado</th></tr></thead>
++  <thead><tr><th>Código</th><th>Nome</th><th>Tipo</th><th>Conservação</th><th>Estado</th><th></th></tr></thead>
+   <tbody>
+   {% for m in itens %}
+     <tr><td>{{ m.codigo }}</td><td>{{ m.nome }}</td><td>{{ m.tipo.value|replace('_', ' ') }}</td>
+-        <td>{{ m.conservacao.value }}</td><td>{{ m.estado.value|replace('_', ' ') }}</td></tr>
++        <td>{{ m.conservacao.value }}</td><td>{{ m.estado.value|replace('_', ' ') }}</td>
++        <td><a href="{{ url_for('web.ver_historico', codigo=m.codigo) }}">histórico</a></td></tr>
+   {% else %}
+-    <tr><td colspan="5" class="text-muted">Nenhum material cadastrado.</td></tr>
++    <tr><td colspan="6" class="text-muted">Nenhum material cadastrado.</td></tr>
+   {% endfor %}
+   </tbody>
+ </table>
+diff --git a/tests/test_materiais.py b/tests/test_materiais.py
+index cd1770c..9000de9 100644
+--- a/tests/test_materiais.py
++++ b/tests/test_materiais.py
+@@ -45,6 +45,14 @@ class CadastroDeMaterialTest(unittest.TestCase):
+ 
+ 
+ class RastreabilidadeTest(unittest.TestCase):  # cenário C04
++    def test_cadastro_gera_movimento_com_quem_registrou_data_e_estado(self):
++        _, servico, historico = montar()
++        servico.cadastrar("BOLA-001", "Bola", "esportivo", "bom", registrado_por="Rany")
++        (mov,) = historico.listar("BOLA-001")
++        self.assertEqual((mov.tipo, mov.registrado_por, mov.estado_resultante),
++                         ("cadastro", "Rany", "disponivel"))
++        self.assertEqual(mov.registrado_em.year, 2026)
++
+     def test_se_o_historico_falha_o_material_nao_e_gravado(self):
+         banco, servico, historico = montar()
+ 
+diff --git a/tests/test_web.py b/tests/test_web.py
+index 869a7d5..9148234 100644
+--- a/tests/test_web.py
++++ b/tests/test_web.py
+@@ -4,12 +4,12 @@ from locomat import create_app
+ 
+ 
+ class FluxoDeCadastroPelaWebTest(unittest.TestCase):
+-    """Fluxo mínimo (H01): tela -> serviço -> repositório -> banco -> tela."""
++    """Fluxo mínimo ponta a ponta: tela -> serviço -> repositório -> banco -> tela."""
+ 
+     def setUp(self):
+         self.cliente = create_app(":memory:").test_client()
+ 
+-    def test_cadastrar_pela_tela_e_ver_na_listagem(self):
++    def test_cadastrar_pela_tela_e_ver_na_listagem_e_no_historico(self):
+         resp = self.cliente.post("/materiais", data={
+             "codigo": "BOLA-001", "nome": "Bola de vôlei",
+             "tipo": "esportivo", "conservacao": "bom"}, follow_redirects=True)
+@@ -18,6 +18,9 @@ class FluxoDeCadastroPelaWebTest(unittest.TestCase):
+         self.assertIn("BOLA-001", html)
+         self.assertIn("Material BOLA-001 cadastrado.", html)
+ 
++        historico = self.cliente.get("/materiais/BOLA-001/historico").get_data(as_text=True)
++        self.assertIn("cadastro", historico)
++
+     def test_cadastro_invalido_mostra_mensagem_e_nao_grava(self):
+         resp = self.cliente.post("/materiais", data={
+             "codigo": "", "nome": "Bola", "tipo": "esportivo", "conservacao": "bom"},

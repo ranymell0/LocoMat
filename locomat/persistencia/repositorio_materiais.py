@@ -24,6 +24,15 @@ class RepositorioMateriaisSQL:
     def buscar_por_codigo(self, codigo: str) -> Material | None:
         linha = self._banco.executar("SELECT * FROM material WHERE codigo = ?", (codigo,)).fetchone()
         return _para_material(linha) if linha else None
-    def listar(self) -> list[Material]:
-        linhas = self._banco.executar("SELECT * FROM material ORDER BY codigo").fetchall()
-        return [_para_material(l) for l in linhas]
+
+    def listar(self, tipo: TipoMaterial | None = None,
+               estado: EstadoMaterial | None = None) -> list[Material]:
+        sql, parametros = "SELECT * FROM material WHERE 1=1", []
+        if tipo:
+            sql += " AND tipo = ?"
+            parametros.append(tipo.value)
+        if estado:
+            sql += " AND estado = ?"
+            parametros.append(estado.value)
+        sql += " ORDER BY codigo"
+        return [_para_material(l) for l in self._banco.executar(sql, tuple(parametros)).fetchall()]
