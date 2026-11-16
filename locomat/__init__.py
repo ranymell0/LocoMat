@@ -23,6 +23,6 @@ def create_app(caminho_banco: str | None = None) -> Flask:
 
     app = Flask(__name__, template_folder="web/templates")
     app.config["SECRET_KEY"] = os.environ.get("LOCOMAT_SECRET", "dev-apenas-para-desenvolvimento")
-    app.register_blueprint(criar_blueprint(materiais))
+    app.register_blueprint(criar_blueprint(materiais, historico))
     app.extensions["locomat_banco"] = banco
     return app

@@ -20,3 +20,6 @@ class HistoricoService:
                               estado_resultante=estado_resultante,
                               registrado_em=self._relogio(), responsavel=responsavel)
         return self._repo.adicionar(movimento)
+
+    def listar(self, material_codigo: str) -> list[Movimento]:
+        return self._repo.listar_por_material(material_codigo)

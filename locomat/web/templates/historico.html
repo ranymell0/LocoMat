@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block conteudo %}
+<h1 class="h4">Histórico de {{ codigo }}</h1>
+<table class="table table-sm">
+  <thead><tr><th>Quando</th><th>Movimento</th><th>Responsável</th><th>Registrado por</th><th>Estado</th></tr></thead>
+  <tbody>
+  {% for m in movimentos %}
+    <tr><td>{{ m.registrado_em.strftime('%d/%m/%Y %H:%M') }}</td><td>{{ m.tipo }}</td>
+        <td>{{ m.responsavel or '-' }}</td><td>{{ m.registrado_por }}</td><td>{{ m.estado_resultante }}</td></tr>
+  {% else %}
+    <tr><td colspan="5" class="text-muted">Sem movimentos.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<a href="{{ url_for('web.listar_materiais') }}">Voltar</a>
+{% endblock %}
