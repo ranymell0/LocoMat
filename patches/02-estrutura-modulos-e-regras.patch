@@ -1,0 +1,201 @@
+diff --git a/locomat/__init__.py b/locomat/__init__.py
+new file mode 100644
+index 0000000..77094f3
+--- /dev/null
++++ b/locomat/__init__.py
+@@ -0,0 +1,14 @@
++"""LocoMat: controle de empréstimo, reserva e manutenção de materiais da Atlética Loucomotiva.
++
++Este arquivo é a raiz de composição: o único lugar que conhece, ao mesmo tempo,
++a interface web, os módulos de domínio e a persistência concreta.
++"""
++import os
++
++from flask import Flask
++
++
++def create_app(caminho_banco: str | None = None) -> Flask:
++    app = Flask(__name__, template_folder="web/templates")
++    app.config["SECRET_KEY"] = os.environ.get("LOCOMAT_SECRET", "dev-apenas-para-desenvolvimento")
++    return app
+diff --git a/locomat/acesso/__init__.py b/locomat/acesso/__init__.py
+new file mode 100644
+index 0000000..63f8ae5
+--- /dev/null
++++ b/locomat/acesso/__init__.py
+@@ -0,0 +1,4 @@
++"""Módulo acesso (planejado para a Etapa 3).
++
++Segredo: esconde como os responsáveis autorizados são identificados e autenticados (RN06).
++"""
+diff --git a/locomat/emprestimos/__init__.py b/locomat/emprestimos/__init__.py
+new file mode 100644
+index 0000000..230d018
+--- /dev/null
++++ b/locomat/emprestimos/__init__.py
+@@ -0,0 +1,5 @@
++"""Módulo emprestimos (planejado para a Etapa 3).
++
++Segredo: esconde como o prazo padrão de devolução e o atraso são calculados (RN01, RN02).
++Protege o cenário C03 (modificabilidade).
++"""
+diff --git a/locomat/historico/__init__.py b/locomat/historico/__init__.py
+new file mode 100644
+index 0000000..f5ad00a
+--- /dev/null
++++ b/locomat/historico/__init__.py
+@@ -0,0 +1,5 @@
++"""Módulo historico.
++
++Segredo: esconde como e onde os movimentos (retirada, devolução, dano...) são
++gravados e consultados. Protege o cenário C04 (rastreabilidade).
++"""
+diff --git a/locomat/manutencao/__init__.py b/locomat/manutencao/__init__.py
+new file mode 100644
+index 0000000..956ec50
+--- /dev/null
++++ b/locomat/manutencao/__init__.py
+@@ -0,0 +1,4 @@
++"""Módulo manutencao (planejado para a Etapa 3).
++
++Segredo: esconde como o dano e o reparo são registrados e quando o material volta ao estoque (RN05).
++"""
+diff --git a/locomat/materiais/__init__.py b/locomat/materiais/__init__.py
+new file mode 100644
+index 0000000..df947fe
+--- /dev/null
++++ b/locomat/materiais/__init__.py
+@@ -0,0 +1,5 @@
++"""Módulo materiais.
++
++Segredo: esconde como o ciclo de vida do material é controlado (quais estados
++existem e quais transições são permitidas, RN03 e RN05).
++"""
+diff --git a/locomat/persistencia/__init__.py b/locomat/persistencia/__init__.py
+new file mode 100644
+index 0000000..bd5db46
+--- /dev/null
++++ b/locomat/persistencia/__init__.py
+@@ -0,0 +1,5 @@
++"""Módulo persistencia.
++
++Segredo: esconde qual banco de dados é usado (SQLite no esqueleto, PostgreSQL em produção)
++e como as tabelas são organizadas. Implementa as portas definidas pelos módulos de domínio.
++"""
+diff --git a/locomat/reservas/__init__.py b/locomat/reservas/__init__.py
+new file mode 100644
+index 0000000..8890a4f
+--- /dev/null
++++ b/locomat/reservas/__init__.py
+@@ -0,0 +1,5 @@
++"""Módulo reservas (planejado para a Etapa 3).
++
++Segredo: esconde como se detecta e se impede a sobreposição de reservas (RN04).
++Protege o cenário C02 (integridade das reservas).
++"""
+diff --git a/locomat/web/__init__.py b/locomat/web/__init__.py
+new file mode 100644
+index 0000000..0f56ba8
+--- /dev/null
++++ b/locomat/web/__init__.py
+@@ -0,0 +1,5 @@
++"""Módulo web.
++
++Segredo: esconde o framework web (Flask) e como as telas são montadas.
++Só conversa com os serviços dos módulos de domínio.
++"""
+diff --git a/tests/__init__.py b/tests/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/tests/test_regras_dependencia.py b/tests/test_regras_dependencia.py
+new file mode 100644
+index 0000000..c5e65e5
+--- /dev/null
++++ b/tests/test_regras_dependencia.py
+@@ -0,0 +1,86 @@
++"""Verifica as regras de dependência do documento de arquitetura (Etapa 2, seção 6).
++
++R1  Módulos de domínio não importam flask, sqlite3, locomat.web nem locomat.persistencia.
++R2  A web não importa locomat.persistencia.
++R3  A persistência não importa locomat.web.
++R4  Um módulo só usa outro pela interface pública do pacote (from locomat.outro import X).
++R5  Só existem as dependências permitidas entre módulos (sem ciclos).
++"""
++import ast
++import unittest
++from pathlib import Path
++
++RAIZ = Path(__file__).resolve().parent.parent / "locomat"
++DOMINIO = {"acesso", "materiais", "historico", "emprestimos", "reservas", "manutencao"}
++INFRA_PROIBIDA_NO_DOMINIO = {"flask", "sqlite3", "werkzeug", "jinja2"}
++PERMITIDAS = {
++    "historico": set(),
++    "acesso": set(),
++    "materiais": {"historico"},
++    "emprestimos": {"materiais", "historico"},
++    "reservas": {"materiais", "historico"},
++    "manutencao": {"materiais", "historico"},
++    "web": DOMINIO,
++    "persistencia": DOMINIO,
++}
++
++
++def importacoes(arquivo: Path):
++    """Devolve os nomes absolutos importados (imports relativos são internos ao módulo)."""
++    arvore = ast.parse(arquivo.read_text(encoding="utf-8"))
++    for no in ast.walk(arvore):
++        if isinstance(no, ast.Import):
++            for alias in no.names:
++                yield alias.name
++        elif isinstance(no, ast.ImportFrom) and no.level == 0 and no.module:
++            yield no.module
++
++
++def arquivos_por_modulo():
++    for pasta in sorted(p for p in RAIZ.iterdir() if p.is_dir() and not p.name.startswith("__")):
++        for arquivo in pasta.rglob("*.py"):
++            yield pasta.name, arquivo
++
++
++class RegrasDeDependenciaTest(unittest.TestCase):
++    def test_modulos_esperados_existem(self):
++        existentes = {p.name for p in RAIZ.iterdir() if p.is_dir() and not p.name.startswith("__")}
++        self.assertEqual(existentes, set(PERMITIDAS))
++
++    def test_dominio_nao_depende_de_infraestrutura(self):  # R1
++        for modulo, arquivo in arquivos_por_modulo():
++            if modulo not in DOMINIO:
++                continue
++            for nome in importacoes(arquivo):
++                with self.subTest(arquivo=arquivo.name, importa=nome):
++                    self.assertNotIn(nome.split(".")[0], INFRA_PROIBIDA_NO_DOMINIO)
++                    self.assertFalse(nome.startswith(("locomat.web", "locomat.persistencia")))
++
++    def test_web_nao_importa_persistencia_e_vice_versa(self):  # R2 e R3
++        for modulo, arquivo in arquivos_por_modulo():
++            for nome in importacoes(arquivo):
++                with self.subTest(arquivo=arquivo.name, importa=nome):
++                    if modulo == "web":
++                        self.assertFalse(nome.startswith("locomat.persistencia"))
++                    if modulo == "persistencia":
++                        self.assertFalse(nome.startswith("locomat.web"))
++
++    def test_modulos_so_se_usam_pela_interface_publica(self):  # R4
++        for modulo, arquivo in arquivos_por_modulo():
++            for nome in importacoes(arquivo):
++                partes = nome.split(".")
++                if partes[0] == "locomat" and len(partes) > 1 and partes[1] != modulo:
++                    with self.subTest(arquivo=arquivo.name, importa=nome):
++                        self.assertEqual(len(partes), 2, "use 'from locomat.<modulo> import ...'")
++
++    def test_so_ha_dependencias_permitidas(self):  # R5
++        for modulo, arquivo in arquivos_por_modulo():
++            for nome in importacoes(arquivo):
++                partes = nome.split(".")
++                if partes[0] == "locomat" and len(partes) > 1 and partes[1] != modulo:
++                    with self.subTest(arquivo=arquivo.name, importa=nome):
++                        self.assertIn(partes[1], PERMITIDAS[modulo])
++
++
++if __name__ == "__main__":
++    unittest.main()

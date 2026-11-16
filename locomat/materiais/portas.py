@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from locomat.materiais.modelo import Material
+from locomat.materiais.modelo import EstadoMaterial, Material, TipoMaterial
 
 
 class RepositorioMateriais(Protocol):
@@ -8,4 +8,5 @@ class RepositorioMateriais(Protocol):
 
     def buscar_por_codigo(self, codigo: str) -> Material | None: ...
 
-    def listar(self) -> list[Material]: ...
+    def listar(self, tipo: TipoMaterial | None = None,
+               estado: EstadoMaterial | None = None) -> list[Material]: ...

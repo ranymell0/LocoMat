@@ -1,6 +1,7 @@
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 
-from locomat.materiais import Conservacao, MaterialInvalido, MaterialService, TipoMaterial
+from locomat.materiais import (Conservacao, EstadoMaterial, MaterialInvalido, MaterialService,
+                               TipoMaterial)
 
 
 def criar_blueprint(materiais: MaterialService) -> Blueprint:
@@ -12,8 +13,15 @@ def criar_blueprint(materiais: MaterialService) -> Blueprint:
 
     @bp.get("/materiais")
     def listar_materiais():
-        return render_template("materiais.html", itens=materiais.listar(), tipos=list(TipoMaterial),
-                               conservacoes=list(Conservacao))
+        tipo, estado = request.args.get("tipo") or None, request.args.get("estado") or None
+        try:
+            itens = materiais.listar(tipo, estado)
+        except ValueError:
+            itens = []
+            flash("Filtro inválido.", "erro")
+        return render_template("materiais.html", itens=itens, tipos=list(TipoMaterial),
+                               estados=list(EstadoMaterial), conservacoes=list(Conservacao),
+                               filtro_tipo=tipo, filtro_estado=estado)
 
     @bp.post("/materiais")
     def cadastrar_material():

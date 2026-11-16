@@ -1,0 +1,615 @@
+diff --git a/locomat/__init__.py b/locomat/__init__.py
+index 77094f3..18669c9 100644
+--- a/locomat/__init__.py
++++ b/locomat/__init__.py
+@@ -7,8 +7,22 @@ import os
+ 
+ from flask import Flask
+ 
++from locomat.historico import HistoricoService
++from locomat.materiais import MaterialService
++from locomat.persistencia import Banco, RepositorioHistoricoSQL, RepositorioMateriaisSQL
++from locomat.web import criar_blueprint
++
+ 
+ def create_app(caminho_banco: str | None = None) -> Flask:
++    caminho = caminho_banco or os.environ.get("LOCOMAT_DB", "locomat.db")
++    banco = Banco(caminho)
++    banco.criar_esquema()
++
++    historico = HistoricoService(RepositorioHistoricoSQL(banco))
++    materiais = MaterialService(RepositorioMateriaisSQL(banco), historico, banco.transacao)
++
+     app = Flask(__name__, template_folder="web/templates")
+     app.config["SECRET_KEY"] = os.environ.get("LOCOMAT_SECRET", "dev-apenas-para-desenvolvimento")
++    app.register_blueprint(criar_blueprint(materiais))
++    app.extensions["locomat_banco"] = banco
+     return app
+diff --git a/locomat/historico/__init__.py b/locomat/historico/__init__.py
+index f5ad00a..591b0d0 100644
+--- a/locomat/historico/__init__.py
++++ b/locomat/historico/__init__.py
+@@ -3,3 +3,8 @@
+ Segredo: esconde como e onde os movimentos (retirada, devolução, dano...) são
+ gravados e consultados. Protege o cenário C04 (rastreabilidade).
+ """
++from locomat.historico.modelo import Movimento
++from locomat.historico.portas import RepositorioHistorico
++from locomat.historico.servico import HistoricoService
++
++__all__ = ["Movimento", "RepositorioHistorico", "HistoricoService"]
+diff --git a/locomat/historico/modelo.py b/locomat/historico/modelo.py
+new file mode 100644
+index 0000000..544f5e3
+--- /dev/null
++++ b/locomat/historico/modelo.py
+@@ -0,0 +1,13 @@
++from dataclasses import dataclass
++from datetime import datetime
++
++
++@dataclass(frozen=True)
++class Movimento:
++    material_codigo: str
++    tipo: str  # cadastro, emprestimo, devolucao, reserva, dano, conclusao_manutencao
++    registrado_por: str
++    estado_resultante: str
++    registrado_em: datetime
++    responsavel: str | None = None  # quem ficou com o material, quando houver
++    id: int | None = None
+diff --git a/locomat/historico/portas.py b/locomat/historico/portas.py
+new file mode 100644
+index 0000000..de7e448
+--- /dev/null
++++ b/locomat/historico/portas.py
+@@ -0,0 +1,7 @@
++from typing import Protocol
++
++from locomat.historico.modelo import Movimento
++
++
++class RepositorioHistorico(Protocol):
++    def adicionar(self, movimento: Movimento) -> Movimento: ...
+diff --git a/locomat/historico/servico.py b/locomat/historico/servico.py
+new file mode 100644
+index 0000000..e3779f0
+--- /dev/null
++++ b/locomat/historico/servico.py
+@@ -0,0 +1,22 @@
++from datetime import datetime, timezone
++from typing import Callable
++
++from locomat.historico.modelo import Movimento
++from locomat.historico.portas import RepositorioHistorico
++
++
++class HistoricoService:
++    """Interface oferecida: registrar(...) e listar(...). Só acrescenta; nunca altera nem apaga."""
++
++    def __init__(self, repositorio: RepositorioHistorico,
++                 relogio: Callable[[], datetime] = lambda: datetime.now(timezone.utc)):
++        self._repo = repositorio
++        self._relogio = relogio
++
++    def registrar(self, material_codigo: str, tipo: str, registrado_por: str,
++                  estado_resultante: str, responsavel: str | None = None) -> Movimento:
++        movimento = Movimento(material_codigo=material_codigo, tipo=tipo,
++                              registrado_por=registrado_por,
++                              estado_resultante=estado_resultante,
++                              registrado_em=self._relogio(), responsavel=responsavel)
++        return self._repo.adicionar(movimento)
+diff --git a/locomat/materiais/__init__.py b/locomat/materiais/__init__.py
+index df947fe..7b51a5f 100644
+--- a/locomat/materiais/__init__.py
++++ b/locomat/materiais/__init__.py
+@@ -3,3 +3,11 @@
+ Segredo: esconde como o ciclo de vida do material é controlado (quais estados
+ existem e quais transições são permitidas, RN03 e RN05).
+ """
++from locomat.materiais.ciclo import TransicaoInvalida, pode_transitar
++from locomat.materiais.modelo import Conservacao, EstadoMaterial, Material, TipoMaterial
++from locomat.materiais.portas import RepositorioMateriais
++from locomat.materiais.servico import CodigoDuplicado, MaterialInvalido, MaterialService
++
++__all__ = ["Conservacao", "EstadoMaterial", "Material", "TipoMaterial", "RepositorioMateriais",
++           "MaterialService", "MaterialInvalido", "CodigoDuplicado",
++           "TransicaoInvalida", "pode_transitar"]
+diff --git a/locomat/materiais/ciclo.py b/locomat/materiais/ciclo.py
+new file mode 100644
+index 0000000..fd1072f
+--- /dev/null
++++ b/locomat/materiais/ciclo.py
+@@ -0,0 +1,17 @@
++"""Ciclo do material (RN03): disponível, emprestado, reservado, em manutenção."""
++from locomat.materiais.modelo import EstadoMaterial as E
++
++_TRANSICOES: dict[E, set[E]] = {
++    E.DISPONIVEL: {E.EMPRESTADO, E.RESERVADO, E.EM_MANUTENCAO},
++    E.RESERVADO: {E.EMPRESTADO, E.DISPONIVEL, E.EM_MANUTENCAO},
++    E.EMPRESTADO: {E.DISPONIVEL, E.EM_MANUTENCAO},
++    E.EM_MANUTENCAO: {E.DISPONIVEL},  # RN05: só sai da manutenção quando o reparo termina
++}
++
++
++class TransicaoInvalida(Exception):
++    pass
++
++
++def pode_transitar(origem: E, destino: E) -> bool:
++    return destino in _TRANSICOES[origem]
+diff --git a/locomat/materiais/modelo.py b/locomat/materiais/modelo.py
+new file mode 100644
+index 0000000..12b0e9c
+--- /dev/null
++++ b/locomat/materiais/modelo.py
+@@ -0,0 +1,30 @@
++from dataclasses import dataclass
++from enum import Enum
++
++
++class TipoMaterial(str, Enum):
++    ESPORTIVO = "esportivo"
++    INSTRUMENTO_BATERIA = "instrumento_bateria"
++
++
++class EstadoMaterial(str, Enum):
++    DISPONIVEL = "disponivel"
++    EMPRESTADO = "emprestado"
++    RESERVADO = "reservado"
++    EM_MANUTENCAO = "em_manutencao"
++
++
++class Conservacao(str, Enum):
++    BOM = "bom"
++    REGULAR = "regular"
++    RUIM = "ruim"
++
++
++@dataclass
++class Material:
++    codigo: str
++    nome: str
++    tipo: TipoMaterial
++    conservacao: Conservacao
++    estado: EstadoMaterial = EstadoMaterial.DISPONIVEL
++    id: int | None = None
+diff --git a/locomat/materiais/portas.py b/locomat/materiais/portas.py
+new file mode 100644
+index 0000000..7c60513
+--- /dev/null
++++ b/locomat/materiais/portas.py
+@@ -0,0 +1,11 @@
++from typing import Protocol
++
++from locomat.materiais.modelo import Material
++
++
++class RepositorioMateriais(Protocol):
++    def adicionar(self, material: Material) -> Material: ...
++
++    def buscar_por_codigo(self, codigo: str) -> Material | None: ...
++
++    def listar(self) -> list[Material]: ...
+diff --git a/locomat/materiais/servico.py b/locomat/materiais/servico.py
+new file mode 100644
+index 0000000..d39d8e9
+--- /dev/null
++++ b/locomat/materiais/servico.py
+@@ -0,0 +1,49 @@
++from contextlib import AbstractContextManager
++from typing import Callable
++
++from locomat.historico import HistoricoService
++from locomat.materiais.modelo import Conservacao, EstadoMaterial, Material, TipoMaterial
++from locomat.materiais.portas import RepositorioMateriais
++
++
++class MaterialInvalido(ValueError):
++    pass
++
++
++class CodigoDuplicado(MaterialInvalido):
++    pass
++
++
++class MaterialService:
++    """Interface oferecida: cadastrar(...) e listar(...) (H01)."""
++
++    def __init__(self, repositorio: RepositorioMateriais, historico: HistoricoService,
++                 transacao: Callable[[], AbstractContextManager]):
++        self._repo = repositorio
++        self._historico = historico
++        self._transacao = transacao
++
++    def cadastrar(self, codigo: str, nome: str, tipo: str, conservacao: str,
++                  registrado_por: str = "sistema") -> Material:
++        codigo, nome = (codigo or "").strip().upper(), (nome or "").strip()
++        if not codigo:
++            raise MaterialInvalido("Informe o código do material.")
++        if not nome:
++            raise MaterialInvalido("Informe o nome do material.")
++        try:
++            tipo_ = TipoMaterial(tipo)
++            conservacao_ = Conservacao(conservacao)
++        except ValueError as erro:
++            raise MaterialInvalido("Tipo ou estado de conservação inválido.") from erro
++
++        # Material e movimento de cadastro são gravados juntos ou não são gravados (C04).
++        with self._transacao():
++            if self._repo.buscar_por_codigo(codigo) is not None:
++                raise CodigoDuplicado(f"Já existe um material com o código {codigo}.")
++            material = self._repo.adicionar(Material(codigo, nome, tipo_, conservacao_))
++            self._historico.registrar(codigo, "cadastro", registrado_por,
++                                      EstadoMaterial.DISPONIVEL.value)
++        return material
++
++    def listar(self) -> list[Material]:
++        return self._repo.listar()
+diff --git a/locomat/persistencia/__init__.py b/locomat/persistencia/__init__.py
+index bd5db46..8fac95d 100644
+--- a/locomat/persistencia/__init__.py
++++ b/locomat/persistencia/__init__.py
+@@ -3,3 +3,8 @@
+ Segredo: esconde qual banco de dados é usado (SQLite no esqueleto, PostgreSQL em produção)
+ e como as tabelas são organizadas. Implementa as portas definidas pelos módulos de domínio.
+ """
++from locomat.persistencia.banco import Banco
++from locomat.persistencia.repositorio_historico import RepositorioHistoricoSQL
++from locomat.persistencia.repositorio_materiais import RepositorioMateriaisSQL
++
++__all__ = ["Banco", "RepositorioHistoricoSQL", "RepositorioMateriaisSQL"]
+diff --git a/locomat/persistencia/banco.py b/locomat/persistencia/banco.py
+new file mode 100644
+index 0000000..2f57717
+--- /dev/null
++++ b/locomat/persistencia/banco.py
+@@ -0,0 +1,59 @@
++import sqlite3
++import threading
++from contextlib import contextmanager
++
++ESQUEMA = """
++CREATE TABLE IF NOT EXISTS material (
++    id INTEGER PRIMARY KEY AUTOINCREMENT,
++    codigo TEXT NOT NULL UNIQUE,
++    nome TEXT NOT NULL,
++    tipo TEXT NOT NULL,
++    conservacao TEXT NOT NULL,
++    estado TEXT NOT NULL
++);
++CREATE TABLE IF NOT EXISTS movimento (
++    id INTEGER PRIMARY KEY AUTOINCREMENT,
++    material_codigo TEXT NOT NULL,
++    tipo TEXT NOT NULL,
++    responsavel TEXT,
++    registrado_por TEXT NOT NULL,
++    estado_resultante TEXT NOT NULL,
++    registrado_em TEXT NOT NULL
++);
++"""
++
++
++class Banco:
++    """Conexão única com transação explícita e reentrante (só a mais externa confirma)."""
++
++    def __init__(self, caminho: str):
++        self.conexao = sqlite3.connect(caminho, check_same_thread=False, isolation_level=None)
++        self.conexao.row_factory = sqlite3.Row
++        self._trava = threading.RLock()
++        self._profundidade = 0
++
++    def criar_esquema(self) -> None:
++        with self._trava:
++            self.conexao.executescript(ESQUEMA)
++
++    @contextmanager
++    def transacao(self):
++        with self._trava:
++            if self._profundidade == 0:
++                self.conexao.execute("BEGIN IMMEDIATE")
++            self._profundidade += 1
++            try:
++                yield self.conexao
++            except BaseException:
++                self._profundidade -= 1
++                if self._profundidade == 0:
++                    self.conexao.execute("ROLLBACK")
++                raise
++            else:
++                self._profundidade -= 1
++                if self._profundidade == 0:
++                    self.conexao.execute("COMMIT")
++
++    def executar(self, sql: str, parametros: tuple = ()):
++        with self._trava:
++            return self.conexao.execute(sql, parametros)
+diff --git a/locomat/persistencia/repositorio_historico.py b/locomat/persistencia/repositorio_historico.py
+new file mode 100644
+index 0000000..e63dbf6
+--- /dev/null
++++ b/locomat/persistencia/repositorio_historico.py
+@@ -0,0 +1,18 @@
++from dataclasses import replace
++
++from locomat.historico import Movimento
++from locomat.persistencia.banco import Banco
++
++
++class RepositorioHistoricoSQL:
++    def __init__(self, banco: Banco):
++        self._banco = banco
++
++    def adicionar(self, movimento: Movimento) -> Movimento:
++        cursor = self._banco.executar(
++            "INSERT INTO movimento (material_codigo, tipo, responsavel, registrado_por,"
++            " estado_resultante, registrado_em) VALUES (?, ?, ?, ?, ?, ?)",
++            (movimento.material_codigo, movimento.tipo, movimento.responsavel,
++             movimento.registrado_por, movimento.estado_resultante,
++             movimento.registrado_em.isoformat()))
++        return replace(movimento, id=cursor.lastrowid)
+diff --git a/locomat/persistencia/repositorio_materiais.py b/locomat/persistencia/repositorio_materiais.py
+new file mode 100644
+index 0000000..b4d96bc
+--- /dev/null
++++ b/locomat/persistencia/repositorio_materiais.py
+@@ -0,0 +1,29 @@
++from dataclasses import replace
++
++from locomat.materiais import Conservacao, EstadoMaterial, Material, TipoMaterial
++from locomat.persistencia.banco import Banco
++
++
++def _para_material(linha) -> Material:
++    return Material(codigo=linha["codigo"], nome=linha["nome"], tipo=TipoMaterial(linha["tipo"]),
++                    conservacao=Conservacao(linha["conservacao"]),
++                    estado=EstadoMaterial(linha["estado"]), id=linha["id"])
++
++
++class RepositorioMateriaisSQL:
++    def __init__(self, banco: Banco):
++        self._banco = banco
++
++    def adicionar(self, material: Material) -> Material:
++        cursor = self._banco.executar(
++            "INSERT INTO material (codigo, nome, tipo, conservacao, estado) VALUES (?, ?, ?, ?, ?)",
++            (material.codigo, material.nome, material.tipo.value,
++             material.conservacao.value, material.estado.value))
++        return replace(material, id=cursor.lastrowid)
++
++    def buscar_por_codigo(self, codigo: str) -> Material | None:
++        linha = self._banco.executar("SELECT * FROM material WHERE codigo = ?", (codigo,)).fetchone()
++        return _para_material(linha) if linha else None
++    def listar(self) -> list[Material]:
++        linhas = self._banco.executar("SELECT * FROM material ORDER BY codigo").fetchall()
++        return [_para_material(l) for l in linhas]
+diff --git a/locomat/web/__init__.py b/locomat/web/__init__.py
+index 0f56ba8..2ac8fa7 100644
+--- a/locomat/web/__init__.py
++++ b/locomat/web/__init__.py
+@@ -3,3 +3,6 @@
+ Segredo: esconde o framework web (Flask) e como as telas são montadas.
+ Só conversa com os serviços dos módulos de domínio.
+ """
++from locomat.web.rotas import criar_blueprint
++
++__all__ = ["criar_blueprint"]
+diff --git a/locomat/web/rotas.py b/locomat/web/rotas.py
+new file mode 100644
+index 0000000..2d35fa3
+--- /dev/null
++++ b/locomat/web/rotas.py
+@@ -0,0 +1,28 @@
++from flask import Blueprint, flash, redirect, render_template, request, url_for
++
++from locomat.materiais import Conservacao, MaterialInvalido, MaterialService, TipoMaterial
++
++
++def criar_blueprint(materiais: MaterialService) -> Blueprint:
++    bp = Blueprint("web", __name__)
++
++    @bp.get("/")
++    def inicio():
++        return redirect(url_for("web.listar_materiais"))
++
++    @bp.get("/materiais")
++    def listar_materiais():
++        return render_template("materiais.html", itens=materiais.listar(), tipos=list(TipoMaterial),
++                               conservacoes=list(Conservacao))
++
++    @bp.post("/materiais")
++    def cadastrar_material():
++        try:
++            m = materiais.cadastrar(request.form.get("codigo", ""), request.form.get("nome", ""),
++                                    request.form.get("tipo", ""), request.form.get("conservacao", ""))
++            flash(f"Material {m.codigo} cadastrado.", "ok")
++        except MaterialInvalido as erro:  # inclui CodigoDuplicado
++            flash(str(erro), "erro")
++        return redirect(url_for("web.listar_materiais"))
++
++    return bp
+diff --git a/locomat/web/templates/base.html b/locomat/web/templates/base.html
+new file mode 100644
+index 0000000..e1749a7
+--- /dev/null
++++ b/locomat/web/templates/base.html
+@@ -0,0 +1,21 @@
++<!doctype html>
++<html lang="pt-BR">
++<head>
++  <meta charset="utf-8">
++  <meta name="viewport" content="width=device-width, initial-scale=1">
++  <title>LocoMat</title>
++  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
++</head>
++<body>
++<nav class="navbar navbar-dark bg-dark mb-4"><div class="container">
++  <a class="navbar-brand" href="{{ url_for('web.listar_materiais') }}">LocoMat</a>
++  <span class="navbar-text">Atlética Loucomotiva</span>
++</div></nav>
++<main class="container">
++  {% for categoria, mensagem in get_flashed_messages(with_categories=true) %}
++    <div class="alert {{ 'alert-success' if categoria == 'ok' else 'alert-danger' }}">{{ mensagem }}</div>
++  {% endfor %}
++  {% block conteudo %}{% endblock %}
++</main>
++</body>
++</html>
+diff --git a/locomat/web/templates/materiais.html b/locomat/web/templates/materiais.html
+new file mode 100644
+index 0000000..49e67ae
+--- /dev/null
++++ b/locomat/web/templates/materiais.html
+@@ -0,0 +1,26 @@
++{% extends "base.html" %}
++{% block conteudo %}
++<h1 class="h4">Materiais</h1>
++<form method="post" action="{{ url_for('web.cadastrar_material') }}" class="row g-2 mb-4">
++  <div class="col-md-2"><input class="form-control" name="codigo" placeholder="Código (BOLA-001)" required></div>
++  <div class="col-md-3"><input class="form-control" name="nome" placeholder="Nome" required></div>
++  <div class="col-md-2"><select class="form-select" name="tipo">
++    {% for t in tipos %}<option value="{{ t.value }}">{{ t.value|replace('_', ' ') }}</option>{% endfor %}
++  </select></div>
++  <div class="col-md-2"><select class="form-select" name="conservacao">
++    {% for c in conservacoes %}<option value="{{ c.value }}">{{ c.value }}</option>{% endfor %}
++  </select></div>
++  <div class="col-md-3"><button class="btn btn-primary w-100">Cadastrar</button></div>
++</form>
++<table class="table table-sm">
++  <thead><tr><th>Código</th><th>Nome</th><th>Tipo</th><th>Conservação</th><th>Estado</th></tr></thead>
++  <tbody>
++  {% for m in itens %}
++    <tr><td>{{ m.codigo }}</td><td>{{ m.nome }}</td><td>{{ m.tipo.value|replace('_', ' ') }}</td>
++        <td>{{ m.conservacao.value }}</td><td>{{ m.estado.value|replace('_', ' ') }}</td></tr>
++  {% else %}
++    <tr><td colspan="5" class="text-muted">Nenhum material cadastrado.</td></tr>
++  {% endfor %}
++  </tbody>
++</table>
++{% endblock %}
+diff --git a/tests/test_ciclo.py b/tests/test_ciclo.py
+new file mode 100644
+index 0000000..19cee26
+--- /dev/null
++++ b/tests/test_ciclo.py
+@@ -0,0 +1,21 @@
++import unittest
++
++from locomat.materiais import EstadoMaterial as E
++from locomat.materiais import pode_transitar
++
++
++class CicloDoMaterialTest(unittest.TestCase):  # RN03 e RN05
++    def test_disponivel_pode_ser_emprestado(self):
++        self.assertTrue(pode_transitar(E.DISPONIVEL, E.EMPRESTADO))
++
++    def test_emprestado_nao_pode_ser_emprestado_de_novo(self):
++        self.assertFalse(pode_transitar(E.EMPRESTADO, E.EMPRESTADO))
++
++    def test_material_em_manutencao_so_volta_a_disponivel(self):
++        self.assertFalse(pode_transitar(E.EM_MANUTENCAO, E.EMPRESTADO))
++        self.assertFalse(pode_transitar(E.EM_MANUTENCAO, E.RESERVADO))
++        self.assertTrue(pode_transitar(E.EM_MANUTENCAO, E.DISPONIVEL))
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_materiais.py b/tests/test_materiais.py
+new file mode 100644
+index 0000000..89244d3
+--- /dev/null
++++ b/tests/test_materiais.py
+@@ -0,0 +1,57 @@
++import unittest
++from datetime import datetime, timezone
++
++from locomat.historico import HistoricoService
++from locomat.materiais import CodigoDuplicado, EstadoMaterial, MaterialInvalido, MaterialService
++from locomat.persistencia import Banco, RepositorioHistoricoSQL, RepositorioMateriaisSQL
++
++
++def montar(relogio=None):
++    banco = Banco(":memory:")
++    banco.criar_esquema()
++    historico = HistoricoService(RepositorioHistoricoSQL(banco),
++                                 relogio or (lambda: datetime(2026, 11, 20, 10, 0, tzinfo=timezone.utc)))
++    servico = MaterialService(RepositorioMateriaisSQL(banco), historico, banco.transacao)
++    return banco, servico, historico
++
++
++class CadastroDeMaterialTest(unittest.TestCase):
++    def test_cadastra_e_lista_como_disponivel(self):  # H01 e H02
++        _, servico, _ = montar()
++        servico.cadastrar("bola-001", "Bola de vôlei", "esportivo", "bom")
++        itens = servico.listar()
++        self.assertEqual([m.codigo for m in itens], ["BOLA-001"])
++        self.assertEqual(itens[0].estado, EstadoMaterial.DISPONIVEL)
++
++    def test_recusa_campo_obrigatorio_vazio(self):
++        _, servico, _ = montar()
++        with self.assertRaises(MaterialInvalido):
++            servico.cadastrar("", "Bola", "esportivo", "bom")
++        with self.assertRaises(MaterialInvalido):
++            servico.cadastrar("BOLA-001", "  ", "esportivo", "bom")
++        self.assertEqual(servico.listar(), [])
++
++    def test_recusa_codigo_duplicado(self):
++        _, servico, _ = montar()
++        servico.cadastrar("SURDO-01", "Surdo", "instrumento_bateria", "bom")
++        with self.assertRaises(CodigoDuplicado):
++            servico.cadastrar("surdo-01", "Outro surdo", "instrumento_bateria", "bom")
++
++
++
++class RastreabilidadeTest(unittest.TestCase):  # cenário C04
++    def test_se_o_historico_falha_o_material_nao_e_gravado(self):
++        banco, servico, historico = montar()
++
++        def falhar(*args, **kwargs):
++            raise RuntimeError("falha simulada")
++
++        historico.registrar = falhar
++        with self.assertRaises(RuntimeError):
++            servico.cadastrar("BOLA-001", "Bola", "esportivo", "bom")
++        self.assertEqual(servico.listar(), [])
++        self.assertEqual(banco.executar("SELECT COUNT(*) FROM material").fetchone()[0], 0)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_web.py b/tests/test_web.py
+new file mode 100644
+index 0000000..869a7d5
+--- /dev/null
++++ b/tests/test_web.py
+@@ -0,0 +1,31 @@
++import unittest
++
++from locomat import create_app
++
++
++class FluxoDeCadastroPelaWebTest(unittest.TestCase):
++    """Fluxo mínimo (H01): tela -> serviço -> repositório -> banco -> tela."""
++
++    def setUp(self):
++        self.cliente = create_app(":memory:").test_client()
++
++    def test_cadastrar_pela_tela_e_ver_na_listagem(self):
++        resp = self.cliente.post("/materiais", data={
++            "codigo": "BOLA-001", "nome": "Bola de vôlei",
++            "tipo": "esportivo", "conservacao": "bom"}, follow_redirects=True)
++        self.assertEqual(resp.status_code, 200)
++        html = resp.get_data(as_text=True)
++        self.assertIn("BOLA-001", html)
++        self.assertIn("Material BOLA-001 cadastrado.", html)
++
++    def test_cadastro_invalido_mostra_mensagem_e_nao_grava(self):
++        resp = self.cliente.post("/materiais", data={
++            "codigo": "", "nome": "Bola", "tipo": "esportivo", "conservacao": "bom"},
++            follow_redirects=True)
++        html = resp.get_data(as_text=True)
++        self.assertIn("Informe o código do material.", html)
++        self.assertIn("Nenhum material cadastrado.", html)
++
++
++if __name__ == "__main__":
++    unittest.main()

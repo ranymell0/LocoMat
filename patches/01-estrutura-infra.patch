@@ -1,0 +1,142 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 0000000..4d0ade2
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,23 @@
++name: CI
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++
++jobs:
++  build-e-testes:
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++      - uses: actions/setup-python@v5
++        with:
++          python-version: "3.12"
++      - name: Instalar dependências (build)
++        run: |
++          python -m pip install --upgrade pip
++          pip install -r requirements.txt
++      - name: Verificar que o pacote importa
++        run: python -c "import locomat; locomat.create_app(':memory:')"
++      - name: Executar testes (inclui as regras de dependência)
++        run: python -m unittest discover -s tests -v
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..2f5c23b
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,12 @@
++__pycache__/
++*.py[cod]
++.venv/
++venv/
++*.db
++*.sqlite3
++.env
++.idea/
++.vscode/
++dist/
++build/
++*.egg-info/
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 0000000..bc47f61
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,9 @@
++FROM python:3.12-slim
++WORKDIR /app
++COPY requirements.txt .
++RUN pip install --no-cache-dir -r requirements.txt
++COPY locomat ./locomat
++ENV LOCOMAT_DB=/data/locomat.db
++VOLUME /data
++EXPOSE 5000
++CMD ["flask", "--app", "locomat", "run", "--host", "0.0.0.0", "--port", "5000"]
+diff --git a/README.md b/README.md
+new file mode 100644
+index 0000000..3a5a1f3
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,52 @@
++# LocoMat
++
++Controle de empréstimo, reserva e manutenção de materiais da Atlética Loucomotiva (UFOP/ICEA).
++Projeto da disciplina CSI410, Engenharia de Software II, 2026/2. Grupo: Rany Souza, Marco Antonio e Weder Souza.
++
++Esta é a **Etapa 2**: um esqueleto executável de um monolito modular em Python que atravessa todas as
++partes da arquitetura (tela, serviço, repositório, banco), com testes e integração contínua.
++Ainda não há funcionalidades completas do cliente; o fluxo mínimo é cadastrar e consultar materiais,
++com o movimento de cadastro gravado no histórico.
++
++## Como executar
++
++Requisitos: Python 3.12.
++
++```bash
++python -m venv .venv
++source .venv/bin/activate        # Windows: .venv\Scripts\activate
++pip install -r requirements.txt
++flask --app locomat run          # abre em http://127.0.0.1:5000
++```
++
++Com Docker: `docker compose up --build` (o banco SQLite fica no volume `locomat-dados`).
++
++## Como testar
++
++```bash
++python -m unittest discover -s tests -v
++```
++
++Os testes incluem `tests/test_regras_dependencia.py`, que verifica as regras de dependência entre os módulos.
++
++## Estrutura (espelha a visão de módulos do documento de arquitetura)
++
++| Pasta | Segredo (o que o módulo esconde) |
++|---|---|
++| `locomat/web` | o framework web e como as telas são montadas |
++| `locomat/materiais` | o ciclo do material (estados e transições permitidas) |
++| `locomat/historico` | como os movimentos são gravados e consultados |
++| `locomat/persistencia` | qual banco é usado e como as tabelas são organizadas |
++| `locomat/emprestimos` (Etapa 3) | como o prazo padrão e o atraso são calculados |
++| `locomat/reservas` (Etapa 3) | como a sobreposição de reservas é impedida |
++| `locomat/manutencao` (Etapa 3) | como o dano e o reparo são registrados |
++| `locomat/acesso` (Etapa 3) | como os responsáveis autorizados são identificados |
++
++`locomat/__init__.py` é a raiz de composição: o único ponto que liga web, serviços e persistência.
++
++## Fluxo de trabalho
++
++- `main` só recebe mudanças por pull request, revisado por outro integrante, com o pipeline passando.
++- Uma branch por história (ex.: `h03-registrar-emprestimo`).
++- O pipeline (`.github/workflows/ci.yml`) roda build e testes a cada push e pull request.
++- A entrega da Etapa 2 está marcada com a tag `etapa-2`.
+diff --git a/docker-compose.yml b/docker-compose.yml
+new file mode 100644
+index 0000000..d9ded08
+--- /dev/null
++++ b/docker-compose.yml
+@@ -0,0 +1,9 @@
++services:
++  app:
++    build: .
++    ports:
++      - "5000:5000"
++    volumes:
++      - locomat-dados:/data
++volumes:
++  locomat-dados:
+diff --git a/requirements.txt b/requirements.txt
+new file mode 100644
+index 0000000..af266d2
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1 @@
++Flask==3.1.3
